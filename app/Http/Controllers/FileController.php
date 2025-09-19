@@ -5,7 +5,9 @@ namespace App\Http\Controllers;
 use App\Models\File;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use App\FormatConversion;
 
+//FileController (Orchestrator)
 class FileController extends Controller
 {
     // Show all files
@@ -19,33 +21,65 @@ class FileController extends Controller
     public function store(Request $request)
     {
         $request->validate([
-            'file' => 'required|file|max:10240', // max 10MB
-            'description' => 'nullable|string|max:30',
+            'file' => 'required|file|max:102400', // max 100MB
+            'description' => 'nullable|string|max:255',
         ]);
-
-
-
 
         $uploadedFile = $request->file('file');
 
 
 
-        // Store file in storage/app/public/files
-        $storedPath = $uploadedFile->store('files', 'public');
+        // Convert file if needed
+        $convertedPath = FormatConversion::convertFileFormat($uploadedFile);
+        //Example: '/tmp/report_64f5a2b1c3d4e_.docx'
+        // check here if the $conertedPaht is null
+        if ($convertedPath === null) {
+            return redirect()->back()->with('error', 'File conversion failed. Please try again.');
+        }
+
+        if ($convertedPath && $convertedPath !== $uploadedFile->getRealPath()) {
+            // Handle converted file...
+
+            // Wrap converted file
+            $convertedFile = new \Illuminate\Http\File($convertedPath);
+
+            // Store in Laravel storage (storage/app/public/files/)
+            // Result: 'files/AbCdEf123456.docx'
+            $storedPath = Storage::disk('public')->putFile('files', $convertedFile);
+
+            // Get metadata from converted file
+            $fileName = basename($storedPath);
+            $extension = pathinfo($convertedPath, PATHINFO_EXTENSION);
+            $mimeType = mime_content_type($convertedPath);
+            $size = filesize($convertedPath);
+            $originalName = pathinfo($uploadedFile->getClientOriginalName(), PATHINFO_FILENAME) . '.' . $extension;
+
+        } else {
+            // Store original file (without conversion)
+            $storedPath = $uploadedFile->store('files', 'public');
+
+            // Get metadata from original
+            $fileName = basename($storedPath);
+            $extension = $uploadedFile->getClientOriginalExtension();
+            $mimeType = $uploadedFile->getMimeType();
+            $size = $uploadedFile->getSize();
+            $originalName = $uploadedFile->getClientOriginalName();
+        }
 
         // Save file metadata in DB
         File::create([
-            'original_name' => $uploadedFile->getClientOriginalName(),
-            'stored_name' => basename($storedPath),
+            'original_name' => $originalName,
+            'stored_name' => $fileName,
             'path' => $storedPath,
-            'extension' => $uploadedFile->getExtension(),
-            'mime_type' => $uploadedFile->getMimeType(),
-            'size' => $uploadedFile->getSize(),
+            'extension' => $extension,
+            'mime_type' => $mimeType,
+            'size' => $size,
             'description' => $request->description,
         ]);
 
         return redirect()->back()->with('success', 'File uploaded successfully!');
     }
+
 
     public function edit(File $file)
     {
@@ -84,4 +118,8 @@ class FileController extends Controller
 
         return redirect()->back()->with('success', 'File deleted successfully!');
     }
+
+
+
+
 }
