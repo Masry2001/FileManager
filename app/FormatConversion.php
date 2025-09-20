@@ -59,9 +59,13 @@ class FormatConversion
 
             case 'jpg':
             case 'jpeg':
-                // TODO: Implement image conversion
-                // convertImageToPng($outputPath, $tempPath);
-                return $tempPath; // Return original for now
+                $success = ConvertFiles::convertImageToPng($outputPath, $tempPath, $extension);
+                if ($success) {
+                    // Return the path with the .png extension
+                    return $outputPath . '.png';
+                }
+                // If conversion failed, return null
+                return null;
 
             default:
                 // No conversion needed → return original file path
