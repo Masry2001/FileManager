@@ -49,9 +49,13 @@ class FormatConversion
                 return null;
 
             case 'mp4':
-                // TODO: Implement video conversion
-                // convertVideoToFLV($outputPath, $tempPath);
-                return $tempPath; // Return original for now
+                $success = ConvertFiles::convertVideoToFLV($outputPath, $tempPath);
+                if ($success) {
+                    // Return the path with the .flv extension
+                    return $outputPath . '.flv';
+                }
+                // If conversion failed, return null
+                return null;
 
             case 'jpg':
             case 'jpeg':
@@ -66,17 +70,4 @@ class FormatConversion
     }
 
 
-
-
-
-
-    private function convertVideoToFLV($outputPath, $tempPath)
-    {
-
-    }
-
-    private function convertImageToPng($outputPath, $tempPath)
-    {
-
-    }
 }
