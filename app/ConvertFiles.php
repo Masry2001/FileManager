@@ -200,44 +200,6 @@ class ConvertFiles
         return false;
     }
 
-    /**
-     * Make an API request to CloudConvert
-     */
-    private static function makeApiRequest($url, $method, $data = null, $apiKey = null): ?array
-    {
-        $headers = ['Content-Type: application/json'];
-
-        if ($apiKey) {
-            $headers[] = 'Authorization: Bearer ' . $apiKey;
-        }
-
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
-
-        if ($method === 'POST' && $data) {
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
-        }
-
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($httpCode >= 200 && $httpCode < 300) {
-            return json_decode($response, true);
-        }
-
-        \Log::error('CloudConvert API error', [
-            'url' => $url,
-            'http_code' => $httpCode,
-            'response' => $response
-        ]);
-
-        return null;
-    }
 
     /**
      * Upload file to CloudConvert
@@ -315,6 +277,347 @@ class ConvertFiles
         return false;
     }
 
+
+
+
+
+    /**
+     * Convert Audio (MP3/WAV) to FLAC using CloudConvert API
+     *
+     * @param string $outputPath The desired output path for the converted file (without extension)
+     * @param string $inputPath The path to the input audio file
+     * @param string $inputFormat The input format (mp3, wav)
+     * @return bool Success status
+     */
+    public static function convertAudioToFLAC($outputPath, $inputPath, $inputFormat): bool
+    {
+        $apiKey = env('CLOUDCONVERT_API_KEY');
+        $apiUrl = 'https://api.cloudconvert.com/v2';
+
+        if (!$apiKey) {
+            \Log::error('CloudConvert API key not found in environment variables');
+            return false;
+        }
+
+        // Validate input file exists and is readable
+        if (!file_exists($inputPath) || !is_readable($inputPath)) {
+            \Log::error('Input audio file does not exist or is not readable', ['path' => $inputPath]);
+            return false;
+        }
+
+        // Check file size (CloudConvert has limits)
+        $fileSize = filesize($inputPath);
+        if ($fileSize === false) {
+            \Log::error('Cannot determine audio file size', ['path' => $inputPath]);
+            return false;
+        }
+
+        // Validate input format
+        $inputFormat = strtolower($inputFormat);
+        if (!in_array($inputFormat, ['mp3', 'wav'])) {
+            \Log::error('Unsupported input audio format', ['format' => $inputFormat]);
+            return false;
+        }
+
+        \Log::info('Starting Audio to FLAC conversion', [
+            'input_path' => $inputPath,
+            'output_path' => $outputPath,
+            'input_format' => $inputFormat,
+            'file_size' => $fileSize
+        ]);
+
+        try {
+            // Step 1: Create a job
+            $jobData = [
+                'tasks' => [
+                    'import-audio' => [
+                        'operation' => 'import/upload'
+                    ],
+                    'convert-audio-to-flac' => [
+                        'operation' => 'convert',
+                        'input' => 'import-audio',
+                        'input_format' => $inputFormat,
+                        'output_format' => 'flac',
+                        'options' => [
+                            'audio_codec' => 'flac',
+                            'audio_bitrate' => null, // Use original quality
+                        ]
+                    ],
+                    'export-flac' => [
+                        'operation' => 'export/url',
+                        'input' => 'convert-audio-to-flac'
+                    ]
+                ]
+            ];
+
+            $jobResponse = self::makeApiRequest($apiUrl . '/jobs', 'POST', $jobData, $apiKey);
+
+            if (!$jobResponse || !isset($jobResponse['data']['id'])) {
+                \Log::error('Failed to create CloudConvert audio job', ['response' => $jobResponse]);
+                return false;
+            }
+
+            $jobId = $jobResponse['data']['id'];
+            \Log::info('CloudConvert audio job created successfully', ['job_id' => $jobId]);
+
+            // Step 2: Upload the audio file
+            $uploadTask = $jobResponse['data']['tasks'][0];
+
+            // Validate upload task structure
+            if (!isset($uploadTask['result']['form']['url']) || !isset($uploadTask['result']['form']['parameters'])) {
+                \Log::error('Invalid audio upload task structure', ['task' => $uploadTask]);
+                return false;
+            }
+
+            $uploadUrl = $uploadTask['result']['form']['url'];
+            $uploadParameters = $uploadTask['result']['form']['parameters'];
+
+            \Log::info('Starting audio file upload to CloudConvert', ['upload_url' => $uploadUrl]);
+
+            $success = self::uploadAudioToCloudConvert($uploadUrl, $uploadParameters, $inputPath, $inputFormat);
+
+            if (!$success) {
+                \Log::error('Failed to upload audio file to CloudConvert');
+                return false;
+            }
+
+            \Log::info('Audio file uploaded successfully, waiting for conversion');
+
+            // Step 3: Wait for job completion with enhanced status tracking
+            $maxWaitTime = 600; // 10 minutes for audio conversion (can take longer)
+            $waitTime = 0;
+            $pollInterval = 5; // 5 seconds
+            $lastStatus = null;
+
+            while ($waitTime < $maxWaitTime) {
+                sleep($pollInterval);
+                $waitTime += $pollInterval;
+
+                $jobStatusResponse = self::makeApiRequest($apiUrl . '/jobs/' . $jobId, 'GET', null, $apiKey);
+
+                if (!$jobStatusResponse) {
+                    \Log::warning('Failed to get audio job status, retrying...', ['job_id' => $jobId]);
+                    continue;
+                }
+
+                $jobStatus = $jobStatusResponse['data']['status'];
+
+                // Log status changes
+                if ($jobStatus !== $lastStatus) {
+                    \Log::info('Audio job status changed', [
+                        'job_id' => $jobId,
+                        'status' => $jobStatus,
+                        'wait_time' => $waitTime
+                    ]);
+                    $lastStatus = $jobStatus;
+                }
+
+                if ($jobStatus === 'finished') {
+                    \Log::info('Audio job finished successfully, looking for export task');
+
+                    // Find the export task
+                    foreach ($jobStatusResponse['data']['tasks'] as $task) {
+                        \Log::debug('Checking audio task', ['task_name' => $task['name'], 'task_status' => $task['status']]);
+
+                        if ($task['name'] === 'export-flac') {
+                            if ($task['status'] !== 'finished') {
+                                \Log::error('Audio export task not finished', ['task' => $task]);
+                                return false;
+                            }
+
+                            if (!isset($task['result']['files'][0]['url'])) {
+                                \Log::error('Audio export task missing download URL', ['task' => $task]);
+                                return false;
+                            }
+
+                            $downloadUrl = $task['result']['files'][0]['url'];
+                            \Log::info('Starting audio file download', ['download_url' => $downloadUrl]);
+
+                            // Step 4: Download the converted file
+                            $downloadSuccess = self::downloadConvertedFile($downloadUrl, $outputPath . '.flac');
+
+                            if ($downloadSuccess) {
+                                \Log::info('Audio to FLAC conversion completed successfully');
+                            } else {
+                                \Log::error('Failed to download converted audio file');
+                            }
+
+                            return $downloadSuccess;
+                        }
+                    }
+
+                    \Log::error('Audio export task not found in finished job', ['tasks' => $jobStatusResponse['data']['tasks']]);
+                    break;
+
+                } elseif ($jobStatus === 'error') {
+                    \Log::error('CloudConvert audio job failed', [
+                        'job_id' => $jobId,
+                        'full_response' => $jobStatusResponse
+                    ]);
+
+                    // Log individual task errors
+                    if (isset($jobStatusResponse['data']['tasks'])) {
+                        foreach ($jobStatusResponse['data']['tasks'] as $task) {
+                            if ($task['status'] === 'error') {
+                                \Log::error('Audio task failed', [
+                                    'task_name' => $task['name'],
+                                    'task_error' => $task['message'] ?? 'No error message',
+                                    'task_details' => $task
+                                ]);
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+
+            if ($waitTime >= $maxWaitTime) {
+                \Log::error('CloudConvert audio job timeout', [
+                    'job_id' => $jobId,
+                    'final_status' => $lastStatus,
+                    'wait_time' => $waitTime
+                ]);
+            }
+
+        } catch (\Exception $e) {
+            \Log::error('Audio to FLAC conversion error: ' . $e->getMessage(), [
+                'exception' => $e->getTraceAsString()
+            ]);
+        }
+
+        return false;
+    }
+
+    /**
+     * Upload audio file to CloudConvert with proper filename and mime type
+     */
+    private static function uploadAudioToCloudConvert($uploadUrl, $parameters, $filePath, $inputFormat): bool
+    {
+        // Validate file before upload
+        if (!file_exists($filePath)) {
+            \Log::error('Upload audio file does not exist', ['path' => $filePath]);
+            return false;
+        }
+
+        $fileSize = filesize($filePath);
+        if ($fileSize === false || $fileSize === 0) {
+            \Log::error('Upload audio file is empty or unreadable', ['path' => $filePath]);
+            return false;
+        }
+
+        // Determine mime type based on format
+        $mimeTypes = [
+            'mp3' => 'audio/mpeg',
+            'wav' => 'audio/wav'
+        ];
+
+        $mimeType = $mimeTypes[$inputFormat] ?? 'audio/mpeg';
+        $fileName = 'audio.' . $inputFormat;
+
+        \Log::info('Uploading audio file to CloudConvert', [
+            'file_path' => $filePath,
+            'file_size' => $fileSize,
+            'input_format' => $inputFormat,
+            'mime_type' => $mimeType,
+            'filename' => $fileName,
+            'upload_url' => $uploadUrl
+        ]);
+
+        $ch = curl_init();
+
+        $postFields = $parameters;
+
+        // Create CURLFile with proper filename and mime type for audio
+        $postFields['file'] = new \CURLFile(
+            $filePath,      // file path
+            $mimeType,      // mime type
+            $fileName       // filename with proper extension
+        );
+
+        curl_setopt($ch, CURLOPT_URL, $uploadUrl);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $postFields);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 600); // 10 minutes for audio files
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+
+        curl_setopt($ch, CURLOPT_VERBOSE, false);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $uploadTime = curl_getinfo($ch, CURLINFO_TOTAL_TIME);
+        $uploadSize = curl_getinfo($ch, CURLINFO_SIZE_UPLOAD);
+
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        \Log::info('Audio upload completed', [
+            'http_code' => $httpCode,
+            'upload_time' => $uploadTime,
+            'upload_size' => $uploadSize,
+            'curl_error' => $curlError
+        ]);
+
+        if ($httpCode >= 200 && $httpCode < 300) {
+            \Log::info('Audio file uploaded successfully');
+            return true;
+        }
+
+        \Log::error('CloudConvert audio file upload error', [
+            'http_code' => $httpCode,
+            'response' => $response,
+            'curl_error' => $curlError,
+            'upload_url' => $uploadUrl,
+            'file_size' => $fileSize
+        ]);
+
+        return false;
+    }
+
+
+
+
+    /**
+     * Make an API request to CloudConvert
+     */
+    private static function makeApiRequest($url, $method, $data = null, $apiKey = null): ?array
+    {
+        $headers = ['Content-Type: application/json'];
+
+        if ($apiKey) {
+            $headers[] = 'Authorization: Bearer ' . $apiKey;
+        }
+
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+
+        if ($method === 'POST' && $data) {
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+        }
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($httpCode >= 200 && $httpCode < 300) {
+            return json_decode($response, true);
+        }
+
+        \Log::error('CloudConvert API error', [
+            'url' => $url,
+            'http_code' => $httpCode,
+            'response' => $response
+        ]);
+
+        return null;
+    }
+
+
     /**
      * Download the converted file from CloudConvert
      */
@@ -341,4 +644,5 @@ class ConvertFiles
 
         return false;
     }
+
 }

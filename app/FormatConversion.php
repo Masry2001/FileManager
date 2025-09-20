@@ -27,37 +27,37 @@ class FormatConversion
 
         // Create a temporary output path (without extension initially)
         $outputPath = sys_get_temp_dir() . '/' . uniqid($newFileName . '_');
-        // Example: /tmp/document_64f5a2b1c3d4e_
+
         switch ($extension) {
             case 'pdf':
                 $success = ConvertFiles::convertPDFToDOCX($outputPath, $tempPath);
                 if ($success) {
                     // Return the path with the .docx extension
                     return $outputPath . '.docx';
-                    // /tmp/document_64f5a2b1c3d4e_.docx
                 }
                 // If conversion failed, return null
                 return null;
 
             case 'wav':
             case 'mp3':
-                // TODO: Implement audio conversion
-                // convertAudioToFLAC($outputPath, $tempPath);
-                return $tempPath; // Return original for now
-                break;
+                $success = ConvertFiles::convertAudioToFLAC($outputPath, $tempPath, $extension);
+                if ($success) {
+                    // Return the path with the .flac extension
+                    return $outputPath . '.flac';
+                }
+                // If conversion failed, return null
+                return null;
 
             case 'mp4':
                 // TODO: Implement video conversion
                 // convertVideoToFLV($outputPath, $tempPath);
                 return $tempPath; // Return original for now
-                break;
 
             case 'jpg':
             case 'jpeg':
                 // TODO: Implement image conversion
                 // convertImageToPng($outputPath, $tempPath);
                 return $tempPath; // Return original for now
-                break;
 
             default:
                 // No conversion needed → return original file path
@@ -68,10 +68,7 @@ class FormatConversion
 
 
 
-    private function convertAudioToFLAC($outputPath, $tempPath)
-    {
 
-    }
 
     private function convertVideoToFLV($outputPath, $tempPath)
     {
