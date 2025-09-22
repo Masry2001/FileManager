@@ -40,11 +40,11 @@
         </div>
 
         {{-- Files list --}}
-        <div class="bg-gray-800 p-6 rounded-lg shadow">
+        <div class="bg-gray-800 p-6 rounded-lg shadow ">
             <h2 class="text-xl font-semibold mb-4">Uploaded Files</h2>
             @if($files->count())
                 <table class="w-full text-left text-gray-300">
-                    <thead class="text-gray-400 border-b border-gray-700">
+                    <thead class="text-gray-400 border-b border-gray-700 align">
                         <tr>
                             <th class="py-2">Name</th>
                             <th class="py-2">Description</th>
@@ -62,7 +62,7 @@
                                     {{-- Download button --}}
                                     <a href="{{ route('files.download', $file) }}"
                                         class="bg-green-600 hover:bg-green-500 px-3 py-1 rounded text-sm">
-                                        Download
+                                        Download File
                                     </a>
 
                                     {{-- Delete button --}}
@@ -71,14 +71,26 @@
                                         @csrf
                                         @method('DELETE')
                                         <button type="submit" class="bg-red-600 hover:bg-red-500 px-3 py-1 rounded text-sm">
-                                            Delete
+                                            Delete File
                                         </button>
                                     </form>
 
                                     {{-- Edit button --}}
                                     <a href="{{ route('files.edit', $file) }}"
                                         class="bg-yellow-600 hover:bg-yellow-500 px-3 py-1 rounded text-sm text-white">
-                                        Edit
+                                        Edit File
+                                    </a>
+
+                                    {{-- View XML button --}}
+                                    <a href="{{ route('xml.view.single', $file->id) }}"
+                                        class="bg-indigo-600 hover:bg-indigo-700 px-3 py-1 rounded text-sm text-white">
+                                        View XML
+                                    </a>
+
+                                    {{-- Download XML button --}}
+                                    <a href="{{ route('xml.download.single', $file->id) }}"
+                                        class="bg-purple-600 hover:bg-purple-700 px-3 py-1 rounded text-sm text-white">
+                                        Download XML
                                     </a>
 
                                 </td>
@@ -89,6 +101,22 @@
             @else
                 <p class="text-gray-400">No files uploaded yet.</p>
             @endif
+        </div>
+
+        {{-- Export XML --}}
+        <div class="bg-gray-800 p-6 rounded-lg shadow mt-8 ">
+            <a href="{{ route('xml.view')  }}">
+                <button class="bg-indigo-600 hover:bg-indigo-700 px-4 py-2 rounded font-semibold">
+                    Show XML
+                </button>
+            </a>
+
+            <a href="{{ route('xml.download') }}" class="btn btn-primary">
+                <button class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded font-semibold">
+                    Download XML
+                </button>
+            </a>
+
         </div>
     </div>
 </x-layout>

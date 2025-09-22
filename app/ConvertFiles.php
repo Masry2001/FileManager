@@ -1221,6 +1221,15 @@ class ConvertFiles
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
         curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 30);
+
+        // Add SSL verification (important for HTTPS)
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+
+        // Follow redirects
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        curl_setopt($ch, CURLOPT_MAXREDIRS, 3);
 
         if ($method === 'POST' && $data) {
             curl_setopt($ch, CURLOPT_POST, true);
@@ -1229,7 +1238,26 @@ class ConvertFiles
 
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        $curlErrno = curl_errno($ch);
+        $curlInfo = curl_getinfo($ch);
+
         curl_close($ch);
+
+        // Enhanced error logging
+        if ($response === false || $httpCode === 0 || $curlErrno !== 0) {
+            \Log::error('CloudConvert cURL error', [
+                'url' => $url,
+                'method' => $method,
+                'curl_errno' => $curlErrno,
+                'curl_error' => $curlError,
+                'http_code' => $httpCode,
+                'response' => $response,
+                'curl_info' => $curlInfo,
+                'headers_sent' => $headers
+            ]);
+            return null;
+        }
 
         if ($httpCode >= 200 && $httpCode < 300) {
             return json_decode($response, true);
@@ -1237,8 +1265,10 @@ class ConvertFiles
 
         \Log::error('CloudConvert API error', [
             'url' => $url,
+            'method' => $method,
             'http_code' => $httpCode,
-            'response' => $response
+            'response' => $response,
+            'curl_info' => $curlInfo
         ]);
 
         return null;
